@@ -167,15 +167,28 @@ define(['N/ui/serverWidget', 'N/query', 'N/log', 'N/url', 'N/record'],
                 
                 log.audit('Query Complete', 'Found ' + salesOrders.length + ' Sales Orders with unbilled items');
 
-                // Calculate summary stats for ALL data
+                // Calculate summary stats for ALL data and QUEUED data
                 var totalSOs = salesOrders.length;
                 var totalUnbilledLineCount = 0;
                 var totalUnbilledAmount = 0;
+                var queuedSOs = 0;
+                var queuedUnbilledLineCount = 0;
+                var queuedUnbilledAmount = 0;
                 
                 for (var i = 0; i < salesOrders.length; i++) {
                     var so = salesOrders[i];
-                    totalUnbilledLineCount += parseInt(so.unbilled_line_count || 0);
-                    totalUnbilledAmount += parseFloat(so.total_unbilled_amount || 0) * -1;
+                    var unbilledLines = parseInt(so.unbilled_line_count || 0);
+                    var unbilledAmt = parseFloat(so.total_unbilled_amount || 0) * -1;
+                    
+                    totalUnbilledLineCount += unbilledLines;
+                    totalUnbilledAmount += unbilledAmt;
+                    
+                    // Track queued totals
+                    if (so.queued_date) {
+                        queuedSOs++;
+                        queuedUnbilledLineCount += unbilledLines;
+                        queuedUnbilledAmount += unbilledAmt;
+                    }
                 }
 
                 // Build table body HTML on server
@@ -191,6 +204,9 @@ define(['N/ui/serverWidget', 'N/query', 'N/log', 'N/url', 'N/record'],
                     summaryTotal: totalSOs,
                     summaryTotalLines: totalUnbilledLineCount,
                     summaryTotalAmount: totalUnbilledAmount,
+                    queuedTotal: queuedSOs,
+                    queuedTotalLines: queuedUnbilledLineCount,
+                    queuedTotalAmount: queuedUnbilledAmount,
                     tableBodyHtml: tableBodyHtml
                 }));
 
@@ -306,45 +322,56 @@ define(['N/ui/serverWidget', 'N/query', 'N/log', 'N/url', 'N/record'],
         }
 
         /**
-         * Builds summary statistics section with dual summaries (all data + selected data)
+         * Builds summary statistics section with three horizontal summaries (all, queued, selected)
          * @param {Array} data - Sales Order data
          * @returns {string} Summary HTML
          */
         function buildSummarySection(data) {
-            return '<h2 class="section-header">📊 Summary - All Unbilled Sales Orders</h2>' +
-                '<div class="summary-grid">' +
+            return '<div class="summary-container">' +
+                '<div class="summary-section">' +
+                '<h3 class="summary-section-header">📊 All Unbilled</h3>' +
                 '<div class="summary-card">' +
                 '<div class="summary-value" id="summaryTotal">0</div>' +
-                '<div class="summary-label">Total Sales Orders</div>' +
-                '<div class="summary-sublabel">With Unbilled Line Items</div>' +
+                '<div class="summary-label">Total SOs</div>' +
                 '</div>' +
                 '<div class="summary-card card-pending">' +
                 '<div class="summary-value" id="summaryTotalLines">0</div>' +
-                '<div class="summary-label">Total Unbilled Lines</div>' +
-                '<div class="summary-sublabel">Across All SOs</div>' +
+                '<div class="summary-label">Unbilled Lines</div>' +
                 '</div>' +
                 '<div class="summary-card card-open">' +
                 '<div class="summary-value" id="summaryTotalAmount">$0.00</div>' +
-                '<div class="summary-label">Total Unbilled Amount</div>' +
-                '<div class="summary-sublabel">All Sales Orders</div>' +
+                '<div class="summary-label">Unbilled Amount</div>' +
                 '</div>' +
                 '</div>' +
-                '<h2 class="section-header">✅ Summary - Selected Sales Orders</h2>' +
-                '<div class="summary-grid">' +
+                '<div class="summary-section">' +
+                '<h3 class="summary-section-header">⏳ Queued</h3>' +
+                '<div class="summary-card card-queued">' +
+                '<div class="summary-value" id="queuedTotal">0</div>' +
+                '<div class="summary-label">Queued SOs</div>' +
+                '</div>' +
+                '<div class="summary-card card-queued-lines">' +
+                '<div class="summary-value" id="queuedTotalLines">0</div>' +
+                '<div class="summary-label">Queued Lines</div>' +
+                '</div>' +
+                '<div class="summary-card card-queued-amount">' +
+                '<div class="summary-value" id="queuedTotalAmount">$0.00</div>' +
+                '<div class="summary-label">Queued Amount</div>' +
+                '</div>' +
+                '</div>' +
+                '<div class="summary-section">' +
+                '<h3 class="summary-section-header">✅ Selected</h3>' +
                 '<div class="summary-card card-selected">' +
                 '<div class="summary-value" id="selectedCount">0</div>' +
                 '<div class="summary-label">Selected SOs</div>' +
-                '<div class="summary-sublabel">Ready for Processing</div>' +
                 '</div>' +
                 '<div class="summary-card card-selected-lines">' +
                 '<div class="summary-value" id="selectedLines">0</div>' +
-                '<div class="summary-label">Selected Unbilled Lines</div>' +
-                '<div class="summary-sublabel">From Selected SOs</div>' +
+                '<div class="summary-label">Selected Lines</div>' +
                 '</div>' +
                 '<div class="summary-card card-selected-amount">' +
                 '<div class="summary-value" id="selectedAmount">$0.00</div>' +
-                '<div class="summary-label">Selected Unbilled Amount</div>' +
-                '<div class="summary-sublabel">From Selected SOs</div>' +
+                '<div class="summary-label">Selected Amount</div>' +
+                '</div>' +
                 '</div>' +
                 '</div>';
         }
@@ -553,21 +580,29 @@ define(['N/ui/serverWidget', 'N/query', 'N/log', 'N/url', 'N/record'],
         function getStyles() {
             return '.report-container { max-width: 1800px; margin: 10px auto; padding: 10px 5px; font-family: Arial, sans-serif; font-size: 13px; }' +
                 '.section-header { color: #013220; margin-top: 25px; margin-bottom: 15px; border-bottom: 2px solid #e2e8f0; padding-bottom: 8px; font-size: 18px; }' +
-                /* Summary cards */
-                '.summary-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; margin: 15px 0 25px 0; }' +
-                '.summary-card { background: #E6EEEA; padding: 16px; border-radius: 6px; text-align: center; border-left: 4px solid #013220; }' +
+                /* Summary container - three horizontal sections */
+                '.summary-container { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; margin: 20px 0 30px 0; }' +
+                '.summary-section { display: flex; flex-direction: column; gap: 10px; }' +
+                '.summary-section-header { color: #013220; font-size: 16px; font-weight: 600; margin: 0 0 10px 0; padding-bottom: 6px; border-bottom: 2px solid #e2e8f0; text-align: center; }' +
+                '.summary-card { background: #E6EEEA; padding: 12px; border-radius: 6px; text-align: center; border-left: 4px solid #013220; }' +
                 '.summary-card.card-pending { border-left-color: #014421; background: #E8F2EC; }' +
                 '.summary-card.card-open { border-left-color: #355E3B; background: #EBF0EB; }' +
+                '.summary-card.card-queued { border-left-color: #B8860B; background: #FFF8DC; }' +
+                '.summary-card.card-queued-lines { border-left-color: #DAA520; background: #FFFACD; }' +
+                '.summary-card.card-queued-amount { border-left-color: #CD853F; background: #FAEBD7; }' +
                 '.summary-card.card-selected { border-left-color: #8A9A5B; background: #F4F7F0; }' +
                 '.summary-card.card-selected-lines { border-left-color: #6B7F3F; background: #F2F5ED; }' +
                 '.summary-card.card-selected-amount { border-left-color: #556B2F; background: #F0F3EC; }' +
-                '.summary-value { font-size: 28px; font-weight: bold; color: #013220; margin-bottom: 5px; }' +
+                '.summary-value { font-size: 24px; font-weight: bold; color: #013220; margin-bottom: 4px; }' +
                 '.summary-card.card-pending .summary-value { color: #014421; }' +
                 '.summary-card.card-open .summary-value { color: #355E3B; }' +
+                '.summary-card.card-queued .summary-value { color: #B8860B; }' +
+                '.summary-card.card-queued-lines .summary-value { color: #DAA520; }' +
+                '.summary-card.card-queued-amount .summary-value { color: #CD853F; }' +
                 '.summary-card.card-selected .summary-value { color: #8A9A5B; }' +
                 '.summary-card.card-selected-lines .summary-value { color: #6B7F3F; }' +
                 '.summary-card.card-selected-amount .summary-value { color: #556B2F; }' +
-                '.summary-label { font-size: 13px; color: #2d3a33; font-weight: 600; }' +
+                '.summary-label { font-size: 12px; color: #2d3a33; font-weight: 600; }' +
                 '.summary-sublabel { font-size: 11px; color: #6b7c72; margin-top: 4px; font-style: italic; }' +
                 /* Table controls */
                 '.table-controls { margin: 20px 0; display: flex; gap: 10px; align-items: center; }' +
@@ -745,16 +780,32 @@ define(['N/ui/serverWidget', 'N/query', 'N/log', 'N/url', 'N/record'],
                 '      try {' +
                 '        var resp = JSON.parse(xhr.responseText);' +
                 '        if (resp.success) {' +
+                '          var queuedLines = 0;' +
+                '          var queuedAmount = 0;' +
                 '          for (var i = 0; i < resp.queuedIds.length; i++) {' +
                 '            var queuedCell = document.getElementById("queued-cell-" + resp.queuedIds[i]);' +
                 '            if (queuedCell) {' +
                 '              queuedCell.textContent = "✓";' +
                 '            }' +
-                '            var checkbox = document.querySelector(".so-checkbox[value=\\"" + resp.queuedIds[i] + "\\"]");' +
+                '            var checkbox = document.querySelector(".so-checkbox[value=\\\"" + resp.queuedIds[i] + "\\\"]");' +
                 '            if (checkbox) {' +
+                '              var row = checkbox.closest("tr");' +
+                '              if (row) {' +
+                '                queuedLines += parseInt(row.getAttribute("data-unbilled-lines") || 0);' +
+                '                queuedAmount += parseFloat(row.getAttribute("data-unbilled-amount") || 0);' +
+                '              }' +
                 '              checkbox.checked = false;' +
                 '              checkbox.disabled = true;' +
                 '            }' +
+                '          }' +
+                '          var queuedTotalEl = document.getElementById("queuedTotal");' +
+                '          var queuedTotalLinesEl = document.getElementById("queuedTotalLines");' +
+                '          var queuedTotalAmountEl = document.getElementById("queuedTotalAmount");' +
+                '          if (queuedTotalEl) queuedTotalEl.textContent = parseInt(queuedTotalEl.textContent || 0) + resp.queuedIds.length;' +
+                '          if (queuedTotalLinesEl) queuedTotalLinesEl.textContent = parseInt(queuedTotalLinesEl.textContent || 0) + queuedLines;' +
+                '          if (queuedTotalAmountEl) {' +
+                '            var currentAmt = parseFloat(queuedTotalAmountEl.textContent.replace(/[^0-9.-]/g, "") || 0);' +
+                '            queuedTotalAmountEl.textContent = "$" + (currentAmt + queuedAmount).toFixed(2).replace(/\\B(?=(\\d{3})+(?!\\d))/g, ",");' +
                 '          }' +
                 '          updateSelectedSummary();' +
                 '          alert(resp.message);' +
@@ -789,11 +840,17 @@ define(['N/ui/serverWidget', 'N/query', 'N/log', 'N/url', 'N/record'],
                 '            var summaryTotal = document.getElementById("summaryTotal");' +
                 '            var summaryTotalLines = document.getElementById("summaryTotalLines");' +
                 '            var summaryTotalAmount = document.getElementById("summaryTotalAmount");' +
+                '            var queuedTotal = document.getElementById("queuedTotal");' +
+                '            var queuedTotalLines = document.getElementById("queuedTotalLines");' +
+                '            var queuedTotalAmount = document.getElementById("queuedTotalAmount");' +
                 '            var reportTableBody = document.getElementById("reportTableBody");' +
                 '            var reportContent = document.getElementById("reportContent");' +
                 '            if (summaryTotal) summaryTotal.textContent = resp.summaryTotal;' +
                 '            if (summaryTotalLines) summaryTotalLines.textContent = resp.summaryTotalLines;' +
                 '            if (summaryTotalAmount) summaryTotalAmount.textContent = "$" + parseFloat(resp.summaryTotalAmount).toFixed(2).replace(/\\B(?=(\\d{3})+(?!\\d))/g, ",");' +
+                '            if (queuedTotal) queuedTotal.textContent = resp.queuedTotal;' +
+                '            if (queuedTotalLines) queuedTotalLines.textContent = resp.queuedTotalLines;' +
+                '            if (queuedTotalAmount) queuedTotalAmount.textContent = "$" + parseFloat(resp.queuedTotalAmount).toFixed(2).replace(/\\B(?=(\\d{3})+(?!\\d))/g, ",");' +
                 '            if (reportTableBody) reportTableBody.innerHTML = resp.tableBodyHtml;' +
                 '            if (reportContent) {' +
                 '              reportContent.className = "";' +
