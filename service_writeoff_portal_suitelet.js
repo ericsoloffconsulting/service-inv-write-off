@@ -78,6 +78,12 @@ define(['N/ui/serverWidget', 'N/query', 'N/log', 'N/url', 'N/record', 'N/runtime
                     return handleUnqueueSalesOrder(context);
                 }
                 
+                // Check if this is an add-note action
+                if (params.action === 'add-note' && params.soId) {
+                    log.debug('handlePost - Routing to handleAddResearchNote', { soId: params.soId });
+                    return handleAddResearchNote(context);
+                }
+                
                 // Get selected SO IDs from checkbox selections
                 var selectedSOIds = params.selectedSOIds;
                 var bulkAction = params.bulkAction || 'queue'; // Default to queue for backward compatibility
@@ -834,6 +840,56 @@ define(['N/ui/serverWidget', 'N/query', 'N/log', 'N/url', 'N/record', 'N/runtime
         }
 
         /**
+         * Handles adding a research note to a Sales Order
+         */
+        function handleAddResearchNote(context) {
+            var response = context.response;
+            var params = context.request.parameters;
+            var soId = params.soId;
+            var note = params.note || '';
+            
+            log.debug('handleAddResearchNote - START', { soId: soId, noteLength: note.length });
+            
+            try {
+                record.submitFields({
+                    type: record.Type.SALES_ORDER,
+                    id: soId,
+                    values: {
+                        custbody_service_research_notes: note
+                    },
+                    options: {
+                        enableSourcing: false,
+                        ignoreMandatoryFields: true
+                    }
+                });
+                
+                log.audit('Research Note Added', 'Sales Order ' + soId + ' - Note: ' + (note.substring(0, 50) || '(cleared)'));
+                
+                response.setHeader({ name: 'Content-Type', value: 'application/json' });
+                response.write(JSON.stringify({ 
+                    success: true, 
+                    message: note ? 'Research note saved.' : 'Research note cleared.',
+                    soId: soId
+                }));
+            } catch (e) {
+                var errorDetails = {
+                    soId: soId,
+                    errorString: e.toString(),
+                    errorName: e.name || 'Unknown',
+                    errorMessage: e.message || 'No message'
+                };
+                
+                log.error('Add Research Note Error - DETAILED', errorDetails);
+                
+                response.setHeader({ name: 'Content-Type', value: 'application/json' });
+                response.write(JSON.stringify({ 
+                    success: false, 
+                    message: 'Error saving research note: ' + e.toString() 
+                }));
+            }
+        }
+
+        /**
          * Handles bulk close for multiple Sales Orders
          */
         function handleBulkClose(context, soIdArray) {
@@ -1357,6 +1413,7 @@ define(['N/ui/serverWidget', 'N/query', 'N/log', 'N/url', 'N/record', 'N/runtime
                 "so.custbody_f4n_scheduled AS scheduled_date, " +
                 "so.custbody_f4n_started AS job_started, " +
                 "so.custbody_f4n_completed AS job_completed, " +
+                "so.custbody_service_research_notes AS research_notes, " +
                 "MAX(BUILTIN.DF(so.custbody_bas_fa_parts_status)) AS parts_status, " +
                 "COUNT(so_line.item) AS unbilled_line_count, " +
                 "SUM(so_line.netamount) AS total_unbilled_amount, " +
@@ -1385,7 +1442,7 @@ define(['N/ui/serverWidget', 'N/query', 'N/log', 'N/url', 'N/record', 'N/runtime
                 "    AND inv_line.taxline = 'F' " +
                 "    AND inv_line.mainline = 'F' " +
                 ") " +
-                "GROUP BY so.id, so.tranid, so.trandate, so.entity, so.status, so.custbody_f4n_job_id, so.custbody_service_queued_for_write_off, so.custbody24, so.shipdate, so.custbody_bas_estimated_ship_date, so.custbody_f4n_details, so.custbody21, so.custbody_f4n_job_state, so.custbody_f4n_scheduled, so.custbody_f4n_started, so.custbody_f4n_completed " +
+                "GROUP BY so.id, so.tranid, so.trandate, so.entity, so.status, so.custbody_f4n_job_id, so.custbody_service_queued_for_write_off, so.custbody24, so.shipdate, so.custbody_bas_estimated_ship_date, so.custbody_f4n_details, so.custbody21, so.custbody_f4n_job_state, so.custbody_f4n_scheduled, so.custbody_f4n_started, so.custbody_f4n_completed, so.custbody_service_research_notes " +
                 "ORDER BY so.tranid";
 
             log.audit('Running Unbilled SO Query', sql);
@@ -1434,6 +1491,19 @@ define(['N/ui/serverWidget', 'N/query', 'N/log', 'N/url', 'N/record', 'N/runtime
                 '</div>' +
                 '<div id="jobDetailsTooltip" class="job-details-tooltip"><div class="tooltip-header">Job Information</div><div id="jobDetailsContent"></div></div>' +
                 '<div id="lineItemsTooltip" class="line-items-tooltip"><div class="tooltip-header">Unbilled Line Items:</div><div id="tooltipContent"></div></div>' +
+                '<div id="researchNoteModal" class="modal-overlay" style="display:none;">' +
+                '<div class="modal-content">' +
+                '<div class="modal-header">📝 Research Note</div>' +
+                '<div class="modal-body">' +
+                '<label class="modal-label">Enter research note for this Sales Order:</label>' +
+                '<textarea id="researchNoteInput" class="modal-textarea" rows="6" placeholder="Enter notes here..."></textarea>' +
+                '</div>' +
+                '<div class="modal-footer">' +
+                '<button type="button" class="modal-btn modal-btn-cancel" onclick="closeResearchNoteModal()">Cancel</button>' +
+                '<button type="button" class="modal-btn modal-btn-save" onclick="saveResearchNote()">Save Note</button>' +
+                '</div>' +
+                '</div>' +
+                '</div>' +
                 '</div>';
 
             return html;
@@ -1462,7 +1532,7 @@ define(['N/ui/serverWidget', 'N/query', 'N/log', 'N/url', 'N/record', 'N/runtime
                 '</div>' +
                 '</div>' +
                 '<div class="summary-section">' +
-                '<h3 class="summary-section-header">⏳ Queued</h3>' +
+                '<h3 class="summary-section-header">⏳ Queued for Write-Off</h3>' +
                 '<div class="summary-card card-queued">' +
                 '<div class="summary-value" id="queuedTotal">0</div>' +
                 '<div class="summary-label">Queued SOs</div>' +
@@ -1490,6 +1560,73 @@ define(['N/ui/serverWidget', 'N/query', 'N/log', 'N/url', 'N/record', 'N/runtime
                 '<div class="summary-value" id="selectedAmount">$0.00</div>' +
                 '<div class="summary-label">Selected Amount</div>' +
                 '</div>' +
+                '</div>' +
+                '<div class="filter-section">' +
+                '<h3 class="filter-section-header">🔍 Filters</h3>' +
+                '<div class="filter-cards-row">' +
+                '<div class="filter-card">' +
+                '<div class="filter-subsection-header">Ship Dates</div>' +
+                '<label class="filter-item">' +
+                '<input type="checkbox" id="filterNoShipDate" checked onchange="applyFilters()">' +
+                '<span class="filter-label">No Ship Date</span>' +
+                '</label>' +
+                '<label class="filter-item">' +
+                '<input type="checkbox" id="filterOldShipDates" checked onchange="applyFilters()">' +
+                '<span class="filter-label">Old Ship Dates</span>' +
+                '</label>' +
+                '<label class="filter-item">' +
+                '<input type="checkbox" id="filterFutureShipDates" onchange="applyFilters()">' +
+                '<span class="filter-label">Future Ship Dates</span>' +
+                '</label>' +
+                '</div>' +
+                '<div class="filter-card">' +
+                '<div class="filter-subsection-header">Job State</div>' +
+                '<label class="filter-item">' +
+                '<input type="checkbox" id="filterJobScheduled" checked onchange="applyFilters()">' +
+                '<span class="filter-label">Scheduled</span>' +
+                '</label>' +
+                '<label class="filter-item">' +
+                '<input type="checkbox" id="filterJobActive" checked onchange="applyFilters()">' +
+                '<span class="filter-label">Active</span>' +
+                '</label>' +
+                '<label class="filter-item">' +
+                '<input type="checkbox" id="filterJobPaused" checked onchange="applyFilters()">' +
+                '<span class="filter-label">Paused</span>' +
+                '</label>' +
+                '<label class="filter-item">' +
+                '<input type="checkbox" id="filterJobCompleted" checked onchange="applyFilters()">' +
+                '<span class="filter-label">Completed</span>' +
+                '</label>' +
+                '</div>' +
+                '<div class="filter-card">' +
+                '<div class="filter-subsection-header">Warranty Type</div>' +
+                '<label class="filter-item">' +
+                '<input type="checkbox" id="filterWarrantyNone" checked onchange="applyFilters()">' +
+                '<span class="filter-label">No Warranty Type</span>' +
+                '</label>' +
+                '<label class="filter-item">' +
+                '<input type="checkbox" id="filterWarrantyCBSI" checked onchange="applyFilters()">' +
+                '<span class="filter-label">CBSI</span>' +
+                '</label>' +
+                '<label class="filter-item">' +
+                '<input type="checkbox" id="filterWarrantyCOD" checked onchange="applyFilters()">' +
+                '<span class="filter-label">Cash on Delivery</span>' +
+                '</label>' +
+                '<label class="filter-item">' +
+                '<input type="checkbox" id="filterWarrantyExtended" checked onchange="applyFilters()">' +
+                '<span class="filter-label">Extended Warranty</span>' +
+                '</label>' +
+                '<label class="filter-item">' +
+                '<input type="checkbox" id="filterWarrantyMfg" checked onchange="applyFilters()">' +
+                '<span class="filter-label">Mfg Warranty Term</span>' +
+                '</label>' +
+                '<label class="filter-item">' +
+                '<input type="checkbox" id="filterWarrantyShop" checked onchange="applyFilters()">' +
+                '<span class="filter-label">Shop Ticket</span>' +
+                '</label>' +
+                '</div>' +
+                '</div>' +
+                '<div class="filter-showing-count" id="filterShipDateCount">Showing: 0 / 0</div>' +
                 '</div>' +
                 '</div>';
         }
@@ -1563,16 +1700,20 @@ define(['N/ui/serverWidget', 'N/query', 'N/log', 'N/url', 'N/record', 'N/runtime
             var jobCompleted = record.job_completed || '';
             var queuedDate = record.queued_date || '';
             
-            var html = '<tr class="line-items-row" data-so-id="' + soId + '" data-unbilled-lines="' + unbilledLines + '" data-unbilled-amount="' + unbilledAmount + '" data-unbilled-detail="' + unbilledDetail + '" data-job-details="' + escapeHtml(jobDetails) + '" data-billing-completed-by="' + escapeHtml(billingCompletedBy) + '" data-job-state="' + escapeHtml(jobState) + '" data-parts-status="' + escapeHtml(partsStatus) + '" data-scheduled-date="' + scheduledDate + '" data-job-started="' + jobStarted + '" data-job-completed="' + jobCompleted + '" onmouseenter="showLineItemsTooltip(this); showJobDetailsTooltip(this);" onmouseleave="hideLineItemsTooltip(); hideJobDetailsTooltip();">';
+            var shipDateRaw = record.ship_date || '';
+            var warrantyType = record.warranty_type || '';
+            var researchNotes = record.research_notes || '';
+            var html = '<tr class="line-items-row" data-so-id="' + soId + '" data-unbilled-lines="' + unbilledLines + '" data-unbilled-amount="' + unbilledAmount + '" data-unbilled-detail="' + unbilledDetail + '" data-job-details="' + escapeHtml(jobDetails) + '" data-billing-completed-by="' + escapeHtml(billingCompletedBy) + '" data-job-state="' + escapeHtml(jobState) + '" data-parts-status="' + escapeHtml(partsStatus) + '" data-scheduled-date="' + scheduledDate + '" data-job-started="' + jobStarted + '" data-job-completed="' + jobCompleted + '" data-ship-date="' + shipDateRaw + '" data-warranty-type="' + escapeHtml(warrantyType) + '" data-research-notes="' + escapeHtml(researchNotes) + '" onmouseenter="showLineItemsTooltip(this); showJobDetailsTooltip(this);" onmouseleave="hideLineItemsTooltip(); hideJobDetailsTooltip();">';
             
             // Checkbox column
             html += '<td class="col-checkbox"><input type="checkbox" class="so-checkbox" value="' + soId + '" onchange="updateSelectedSummary()"></td>';
             
             // Actions dropdown
-            html += '<td class="col-actions"><select class="actions-dropdown" onchange="handleAction(this, ' + soId + ')" onclick="event.stopPropagation();"><option value="">▼</option><option value="queue">Queue for Bill & Write-Off</option><option value="close">Close (Cancel)</option><option value="bill">Manual Bill (Invoice)</option><option value="auto-bill">Auto-Bill (Invoice)</option><option value="cbsi-bill-je">CBSI (Bill and JE)</option></select></td>';
+            html += '<td class="col-actions"><select class="actions-dropdown" onchange="handleAction(this, ' + soId + ')" onclick="event.stopPropagation();"><option value="">▼</option><option value="queue">Queue for Bill & Write-Off</option><option value="close">Close (Cancel)</option><option value="bill">Manual Bill (Invoice)</option><option value="auto-bill">Auto-Bill (Invoice)</option><option value="cbsi-bill-je">CBSI (Bill and JE)</option><option value="add-note">Add Research Note</option></select></td>';
             
             // Sales Order columns (slate group)
-            html += '<td class="col-slate">' + buildTransactionLink(record.so_id, record.so_number, 'salesord') + '</td>';
+            var noteIcon = researchNotes ? ' <span class="research-note-icon" id="note-icon-' + soId + '" title="Has research notes">ℹ️</span>' : '<span class="research-note-icon" id="note-icon-' + soId + '" style="display:none;" title="Has research notes">ℹ️</span>';
+            html += '<td class="col-slate">' + buildTransactionLink(record.so_id, record.so_number, 'salesord') + noteIcon + '</td>';
             html += '<td class="col-slate queued-cell" id="queued-cell-' + soId + '">';
             if (queuedDate) {
                 html += '<span class="queued-checkmark">✓</span><span class="unqueue-x" onclick="handleUnqueue(' + soId + ', event)" title="Remove from queue">✕</span>';
@@ -1716,8 +1857,8 @@ define(['N/ui/serverWidget', 'N/query', 'N/log', 'N/url', 'N/record', 'N/runtime
         function getStyles() {
             return '.report-container { max-width: 1800px; margin: 10px auto; padding: 10px 5px; font-family: Arial, sans-serif; font-size: 13px; }' +
                 '.section-header { color: #013220; margin-top: 25px; margin-bottom: 15px; border-bottom: 2px solid #e2e8f0; padding-bottom: 8px; font-size: 18px; }' +
-                /* Summary container - three horizontal sections */
-                '.summary-container { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; margin: 20px 0 30px 0; }' +
+                /* Summary container - four columns (3 summary sections + filters) */
+                '.summary-container { display: grid; grid-template-columns: minmax(100px, 1fr) minmax(100px, 1fr) minmax(100px, 1fr) 500px; gap: 10px; margin: 20px 0 30px 0; }' +
                 '.summary-section { display: flex; flex-direction: column; gap: 10px; }' +
                 '.summary-section-header { color: #013220; font-size: 16px; font-weight: 600; margin: 0 0 10px 0; padding-bottom: 6px; border-bottom: 2px solid #e2e8f0; text-align: center; }' +
                 '.summary-card { background: #E6EEEA; padding: 12px; border-radius: 6px; text-align: center; border-left: 4px solid #013220; }' +
@@ -1740,6 +1881,19 @@ define(['N/ui/serverWidget', 'N/query', 'N/log', 'N/url', 'N/record', 'N/runtime
                 '.summary-card.card-selected-amount .summary-value { color: #556B2F; }' +
                 '.summary-label { font-size: 12px; color: #2d3a33; font-weight: 600; }' +
                 '.summary-sublabel { font-size: 11px; color: #6b7c72; margin-top: 4px; font-style: italic; }' +
+                /* Filter section */
+                '.filter-section { display: flex; flex-direction: column; gap: 10px; }' +
+                '.filter-section-header { color: #013220; font-size: 16px; font-weight: 600; margin: 0 0 5px 0; padding-bottom: 6px; border-bottom: 2px solid #e2e8f0; text-align: center; }' +
+                '.filter-showing-count { text-align: center; font-size: 12px; color: #013220; font-weight: 600; margin-bottom: 8px; }' +
+                '.filter-cards-row { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px; margin-bottom: 8px; }' +
+                '.filter-card { background: #F5F5F5; padding: 8px; border-radius: 6px; border-left: 4px solid #666; }' +
+                '.filter-card-placeholder { }' +
+                '.filter-subsection-header { font-size: 12px; font-weight: 600; color: #013220; margin-bottom: 8px; text-transform: uppercase; }' +
+                '.filter-item { display: flex; align-items: center; gap: 8px; cursor: pointer; margin-bottom: 6px; }' +
+                '.filter-item:last-of-type { margin-bottom: 0; }' +
+                '.filter-item input[type="checkbox"] { width: 16px; height: 16px; min-width: 16px; min-height: 16px; cursor: pointer; accent-color: #013220; flex-shrink: 0; }' +
+                '.filter-label { font-size: 13px; color: #1a2e1f; font-weight: 500; user-select: none; }' +
+                '.filter-count { font-size: 11px; color: #6b7c72; margin-top: 4px; }' +
                 /* Table controls */
                 '.table-controls { margin: 20px 0; display: flex; gap: 10px; align-items: center; }' +
                 '#searchBox { flex: 1; padding: 8px 12px; border: 1px solid #cbd5e1; border-radius: 4px; font-size: 13px; }' +
@@ -1785,6 +1939,10 @@ define(['N/ui/serverWidget', 'N/query', 'N/log', 'N/url', 'N/record', 'N/runtime
                 '.queued-checkmark { color: #355E3B; }' +
                 '.unqueue-x { color: #8B0000; font-size: 14px; margin-left: 6px; cursor: pointer; opacity: 0.6; font-weight: bold; transition: opacity 0.2s; }' +
                 '.unqueue-x:hover { opacity: 1; }' +
+                '.research-note-icon { margin-left: 4px; font-size: 12px; cursor: help; }' +
+                '.research-notes-section { background: #FFF8DC; border: 1px solid #DAA520; border-radius: 4px; padding: 8px; margin-bottom: 12px; }' +
+                '.research-notes-label { font-weight: 600; color: #B8860B; font-size: 11px; text-transform: uppercase; margin-bottom: 4px; }' +
+                '.research-notes-value { color: #1a2e1f; font-size: 12px; line-height: 1.4; white-space: pre-wrap; word-wrap: break-word; }' +
                 /* Line items tooltip */
                 '.line-items-row { cursor: help; }' +
                 '.line-items-tooltip { display: none; position: fixed; bottom: 20px; right: 20px; background: white; border: 2px solid #355E3B; border-radius: 6px; padding: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.25); z-index: 100000; min-width: 300px; max-width: 400px; }' +
@@ -1822,7 +1980,21 @@ define(['N/ui/serverWidget', 'N/query', 'N/log', 'N/url', 'N/record', 'N/runtime
                 '.load-btn { background: #013220; color: white; border: none; padding: 15px 40px; border-radius: 6px; cursor: pointer; font-size: 16px; font-weight: 600; box-shadow: 0 2px 4px rgba(1,50,32,0.3); transition: all 0.2s; }' +
                 '.load-btn:hover { background: #012618; transform: translateY(-1px); box-shadow: 0 4px 8px rgba(1,50,32,0.4); }' +
                 '.load-hint { margin-top: 15px; color: #013220; font-size: 13px; }' +
-                '.hidden { display: none !important; }';
+                '.hidden { display: none !important; }' +
+                /* Modal styles */
+                '.modal-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 10000; display: flex; justify-content: center; align-items: center; }' +
+                '.modal-content { background: white; border-radius: 8px; box-shadow: 0 4px 20px rgba(0,0,0,0.3); width: 500px; max-width: 90%; }' +
+                '.modal-header { background: #013220; color: white; padding: 15px 20px; font-size: 16px; font-weight: 600; border-radius: 8px 8px 0 0; }' +
+                '.modal-body { padding: 20px; }' +
+                '.modal-label { display: block; font-size: 13px; color: #1a2e1f; margin-bottom: 10px; font-weight: 500; }' +
+                '.modal-textarea { width: 100%; padding: 12px; border: 1px solid #cbd5e1; border-radius: 4px; font-size: 13px; font-family: Arial, sans-serif; resize: vertical; box-sizing: border-box; }' +
+                '.modal-textarea:focus { outline: none; border-color: #013220; box-shadow: 0 0 0 2px rgba(1,50,32,0.15); }' +
+                '.modal-footer { padding: 15px 20px; border-top: 1px solid #e2e8f0; display: flex; justify-content: flex-end; gap: 10px; }' +
+                '.modal-btn { padding: 10px 20px; border-radius: 4px; font-size: 14px; font-weight: 600; cursor: pointer; transition: all 0.15s; }' +
+                '.modal-btn-cancel { background: white; color: #013220; border: 1px solid #cbd5e1; }' +
+                '.modal-btn-cancel:hover { background: #f1f5f9; border-color: #013220; }' +
+                '.modal-btn-save { background: #013220; color: white; border: none; }' +
+                '.modal-btn-save:hover { background: #012618; }';
         }
 
         /**
@@ -1831,19 +2003,98 @@ define(['N/ui/serverWidget', 'N/query', 'N/log', 'N/url', 'N/record', 'N/runtime
          */
         function getJavaScript() {
             return 'function filterTable() {' +
+                '  applyFilters();' +
+                '}' +
+                'function applyFilters() {' +
                 '  var input = document.getElementById("searchBox");' +
-                '  var filter = input.value.toUpperCase();' +
+                '  var filter = input ? input.value.toUpperCase() : "";' +
+                '  var oldShipDatesCheckbox = document.getElementById("filterOldShipDates");' +
+                '  var futureShipDatesCheckbox = document.getElementById("filterFutureShipDates");' +
+                '  var noShipDateCheckbox = document.getElementById("filterNoShipDate");' +
+                '  var showOldShipDates = oldShipDatesCheckbox ? oldShipDatesCheckbox.checked : true;' +
+                '  var showFutureShipDates = futureShipDatesCheckbox ? futureShipDatesCheckbox.checked : false;' +
+                '  var showNoShipDate = noShipDateCheckbox ? noShipDateCheckbox.checked : true;' +
+                '  var jobScheduledCheckbox = document.getElementById("filterJobScheduled");' +
+                '  var jobActiveCheckbox = document.getElementById("filterJobActive");' +
+                '  var jobPausedCheckbox = document.getElementById("filterJobPaused");' +
+                '  var jobCompletedCheckbox = document.getElementById("filterJobCompleted");' +
+                '  var showJobScheduled = jobScheduledCheckbox ? jobScheduledCheckbox.checked : true;' +
+                '  var showJobActive = jobActiveCheckbox ? jobActiveCheckbox.checked : true;' +
+                '  var showJobPaused = jobPausedCheckbox ? jobPausedCheckbox.checked : true;' +
+                '  var showJobCompleted = jobCompletedCheckbox ? jobCompletedCheckbox.checked : true;' +
+                '  var warrantyNoneCheckbox = document.getElementById("filterWarrantyNone");' +
+                '  var warrantyCBSICheckbox = document.getElementById("filterWarrantyCBSI");' +
+                '  var warrantyCODCheckbox = document.getElementById("filterWarrantyCOD");' +
+                '  var warrantyExtendedCheckbox = document.getElementById("filterWarrantyExtended");' +
+                '  var warrantyMfgCheckbox = document.getElementById("filterWarrantyMfg");' +
+                '  var warrantyShopCheckbox = document.getElementById("filterWarrantyShop");' +
+                '  var showWarrantyNone = warrantyNoneCheckbox ? warrantyNoneCheckbox.checked : true;' +
+                '  var showWarrantyCBSI = warrantyCBSICheckbox ? warrantyCBSICheckbox.checked : true;' +
+                '  var showWarrantyCOD = warrantyCODCheckbox ? warrantyCODCheckbox.checked : true;' +
+                '  var showWarrantyExtended = warrantyExtendedCheckbox ? warrantyExtendedCheckbox.checked : true;' +
+                '  var showWarrantyMfg = warrantyMfgCheckbox ? warrantyMfgCheckbox.checked : true;' +
+                '  var showWarrantyShop = warrantyShopCheckbox ? warrantyShopCheckbox.checked : true;' +
                 '  var tbody = document.getElementById("reportTableBody");' +
+                '  if (!tbody) return;' +
                 '  var tr = tbody.children;' +
+                '  var today = new Date();' +
+                '  today.setHours(0, 0, 0, 0);' +
+                '  var visibleCount = 0;' +
+                '  var totalCount = tr.length;' +
                 '  for (var i = 0; i < tr.length; i++) {' +
                 '    var row = tr[i];' +
+                '    var showRow = true;' +
                 '    var txtValue = row.textContent || row.innerText;' +
-                '    if (txtValue.toUpperCase().indexOf(filter) > -1) {' +
+                '    if (filter && txtValue.toUpperCase().indexOf(filter) === -1) {' +
+                '      showRow = false;' +
+                '    }' +
+                '    if (showRow) {' +
+                '      var shipDateStr = row.getAttribute("data-ship-date");' +
+                '      if (!shipDateStr) {' +
+                '        showRow = showNoShipDate;' +
+                '      } else {' +
+                '        var shipDate = new Date(shipDateStr);' +
+                '        shipDate.setHours(0, 0, 0, 0);' +
+                '        if (shipDate >= today) {' +
+                '          showRow = showFutureShipDates;' +
+                '        } else {' +
+                '          showRow = showOldShipDates;' +
+                '        }' +
+                '      }' +
+                '    }' +
+                '    if (showRow) {' +
+                '      var jobState = (row.getAttribute("data-job-state") || "").toLowerCase();' +
+                '      var jobStateMatch = false;' +
+                '      if (showJobScheduled && jobState.indexOf("scheduled") >= 0) jobStateMatch = true;' +
+                '      if (showJobActive && jobState.indexOf("active") >= 0) jobStateMatch = true;' +
+                '      if (showJobPaused && jobState.indexOf("paused") >= 0) jobStateMatch = true;' +
+                '      if (showJobCompleted && jobState.indexOf("completed") >= 0) jobStateMatch = true;' +
+                '      if (!jobState && (showJobScheduled || showJobActive || showJobPaused || showJobCompleted)) jobStateMatch = true;' +
+                '      showRow = jobStateMatch;' +
+                '    }' +
+                '    if (showRow) {' +
+                '      var warrantyType = (row.getAttribute("data-warranty-type") || "").toLowerCase();' +
+                '      var warrantyMatch = false;' +
+                '      if (showWarrantyCBSI && warrantyType === "cbsi") warrantyMatch = true;' +
+                '      else if (showWarrantyCOD && warrantyType === "cash on delivery") warrantyMatch = true;' +
+                '      else if (showWarrantyExtended && warrantyType === "extended warranty") warrantyMatch = true;' +
+                '      else if (showWarrantyMfg && warrantyType === "manufacturer warranty term") warrantyMatch = true;' +
+                '      else if (showWarrantyShop && warrantyType === "shop ticket") warrantyMatch = true;' +
+                '      else if (showWarrantyNone && (warrantyType === "" || warrantyType === "-- please select --")) warrantyMatch = true;' +
+                '      showRow = warrantyMatch;' +
+                '    }' +
+                '    if (showRow) {' +
                 '      row.style.display = "";' +
+                '      visibleCount++;' +
                 '    } else {' +
                 '      row.style.display = "none";' +
                 '    }' +
                 '  }' +
+                '  var filterCountEl = document.getElementById("filterShipDateCount");' +
+                '  if (filterCountEl) {' +
+                '    filterCountEl.textContent = "Showing: " + visibleCount + " / " + totalCount;' +
+                '  }' +
+                '  updateSelectedSummary();' +
                 '}' +
                 'function handleUnqueue(soId, event) {' +
                 '  event.stopPropagation();' +
@@ -2106,6 +2357,7 @@ define(['N/ui/serverWidget', 'N/query', 'N/log', 'N/url', 'N/record', 'N/runtime
                 '              reportContent.className = "";' +
                 '              reportContent.style.display = "block";' +
                 '            }' +
+                '            applyFilters();' +
                 '          } else {' +
                 '            alert("Error loading data: " + resp.message);' +
                 '            var loadBtn = document.getElementById("loadButtonContainer");' +
@@ -2254,6 +2506,7 @@ define(['N/ui/serverWidget', 'N/query', 'N/log', 'N/url', 'N/record', 'N/runtime
                 '  var tooltip = document.getElementById("jobDetailsTooltip");' +
                 '  var tooltipContent = document.getElementById("jobDetailsContent");' +
                 '  if (!tooltip || !tooltipContent) return;' +
+                '  var researchNotes = row.getAttribute("data-research-notes");' +
                 '  var jobDetails = row.getAttribute("data-job-details");' +
                 '  var billingCompletedBy = row.getAttribute("data-billing-completed-by");' +
                 '  var jobState = row.getAttribute("data-job-state");' +
@@ -2262,6 +2515,9 @@ define(['N/ui/serverWidget', 'N/query', 'N/log', 'N/url', 'N/record', 'N/runtime
                 '  var jobStarted = row.getAttribute("data-job-started");' +
                 '  var jobCompleted = row.getAttribute("data-job-completed");' +
                 '  var html = "";' +
+                '  if (researchNotes) {' +
+                '    html += "<div class=\\"research-notes-section\\"><div class=\\"research-notes-label\\">Research Notes:</div><div class=\\"research-notes-value\\">" + researchNotes.replace(/&lt;br&gt;/gi, "<br>") + "</div></div>";' +
+                '  }' +
                 '  var unescapedDetails = jobDetails ? jobDetails.replace(/&lt;br&gt;/gi, "<br>") : "None";' +
                 '  html += "<div class=\\"job-detail-section full-width\\"><div class=\\"job-detail-label\\">Job Details:</div><div class=\\"job-detail-value\\">" + unescapedDetails + "</div></div>";' +
                 '  html += "<div class=\\"job-detail-columns\\">";' +
@@ -2418,7 +2674,64 @@ define(['N/ui/serverWidget', 'N/query', 'N/log', 'N/url', 'N/record', 'N/runtime
                 '      }' +
                 '    };' +
                 '    xhr.send("action=cbsi-bill-je&soId=" + soId);' +
+                '  } else if (action === "add-note") {' +
+                '    var row = selectElement.closest("tr");' +
+                '    var existingNote = row ? row.getAttribute("data-research-notes") || "" : "";' +
+                '    openResearchNoteModal(soId, existingNote, row);' +
                 '  }' +
+                '}' +
+                'var currentNoteSOId = null;' +
+                'var currentNoteRow = null;' +
+                'function openResearchNoteModal(soId, existingNote, row) {' +
+                '  currentNoteSOId = soId;' +
+                '  currentNoteRow = row;' +
+                '  var modal = document.getElementById("researchNoteModal");' +
+                '  var textarea = document.getElementById("researchNoteInput");' +
+                '  if (modal && textarea) {' +
+                '    textarea.value = existingNote;' +
+                '    modal.style.display = "flex";' +
+                '    textarea.focus();' +
+                '  }' +
+                '}' +
+                'function closeResearchNoteModal() {' +
+                '  var modal = document.getElementById("researchNoteModal");' +
+                '  if (modal) modal.style.display = "none";' +
+                '  currentNoteSOId = null;' +
+                '  currentNoteRow = null;' +
+                '}' +
+                'function saveResearchNote() {' +
+                '  var textarea = document.getElementById("researchNoteInput");' +
+                '  var newNote = textarea ? textarea.value : "";' +
+                '  var soId = currentNoteSOId;' +
+                '  var row = currentNoteRow;' +
+                '  closeResearchNoteModal();' +
+                '  showLoading();' +
+                '  var xhr = new XMLHttpRequest();' +
+                '  xhr.open("POST", SUITELET_URL, true);' +
+                '  xhr.setRequestHeader("Content-Type", "application/x-www-form-urlencoded");' +
+                '  xhr.onreadystatechange = function() {' +
+                '    if (xhr.readyState === 4) {' +
+                '      hideLoading();' +
+                '      try {' +
+                '        var resp = JSON.parse(xhr.responseText);' +
+                '        if (resp.success) {' +
+                '          alert(resp.message);' +
+                '          if (row) {' +
+                '            row.setAttribute("data-research-notes", newNote);' +
+                '            var noteIcon = document.getElementById("note-icon-" + soId);' +
+                '            if (noteIcon) {' +
+                '              noteIcon.style.display = newNote ? "inline" : "none";' +
+                '            }' +
+                '          }' +
+                '        } else {' +
+                '          alert("Error: " + resp.message);' +
+                '        }' +
+                '      } catch (e) {' +
+                '        alert("Error processing response: " + e.toString());' +
+                '      }' +
+                '    }' +
+                '  };' +
+                '  xhr.send("action=add-note&soId=" + soId + "&note=" + encodeURIComponent(newNote));' +
                 '}';
         }
 
