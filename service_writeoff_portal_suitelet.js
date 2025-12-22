@@ -847,15 +847,34 @@ define(['N/ui/serverWidget', 'N/query', 'N/log', 'N/url', 'N/record', 'N/runtime
             var params = context.request.parameters;
             var soId = params.soId;
             var note = params.note || '';
+            var followUpDateParam = params.followUpDate || '';
             
-            log.debug('handleAddResearchNote - START', { soId: soId, noteLength: note.length });
+            // Convert date from YYYY-MM-DD (HTML date input format) to M/D/YYYY (NetSuite format)
+            var followUpDate = '';
+            if (followUpDateParam) {
+                try {
+                    var dateParts = followUpDateParam.split('-');
+                    if (dateParts.length === 3) {
+                        var year = dateParts[0];
+                        var month = parseInt(dateParts[1], 10); // Remove leading zero
+                        var day = parseInt(dateParts[2], 10); // Remove leading zero
+                        followUpDate = month + '/' + day + '/' + year;
+                    }
+                } catch (dateErr) {
+                    log.error('Date Conversion Error', { original: followUpDateParam, error: dateErr.toString() });
+                    followUpDate = followUpDateParam; // Use original if conversion fails
+                }
+            }
+            
+            log.debug('handleAddResearchNote - START', { soId: soId, noteLength: note.length, followUpDateParam: followUpDateParam, followUpDate: followUpDate });
             
             try {
                 record.submitFields({
                     type: record.Type.SALES_ORDER,
                     id: soId,
                     values: {
-                        custbody_service_research_notes: note
+                        custbody_service_research_notes: note,
+                        custbody_service_research_followupdate: followUpDate
                     },
                     options: {
                         enableSourcing: false,
@@ -863,13 +882,14 @@ define(['N/ui/serverWidget', 'N/query', 'N/log', 'N/url', 'N/record', 'N/runtime
                     }
                 });
                 
-                log.audit('Research Note Added', 'Sales Order ' + soId + ' - Note: ' + (note.substring(0, 50) || '(cleared)'));
+                log.audit('Research Note Added', 'Sales Order ' + soId + ' - Note: ' + (note.substring(0, 50) || '(cleared)') + ' - Follow Up: ' + (followUpDate || '(cleared)'));
                 
                 response.setHeader({ name: 'Content-Type', value: 'application/json' });
                 response.write(JSON.stringify({ 
                     success: true, 
                     message: note ? 'Research note saved.' : 'Research note cleared.',
-                    soId: soId
+                    soId: soId,
+                    followUpDate: followUpDateParam
                 }));
             } catch (e) {
                 var errorDetails = {
@@ -1414,6 +1434,7 @@ define(['N/ui/serverWidget', 'N/query', 'N/log', 'N/url', 'N/record', 'N/runtime
                 "so.custbody_f4n_started AS job_started, " +
                 "so.custbody_f4n_completed AS job_completed, " +
                 "so.custbody_service_research_notes AS research_notes, " +
+                "so.custbody_service_research_followupdate AS follow_up_date, " +
                 "MAX(BUILTIN.DF(so.custbody_bas_fa_parts_status)) AS parts_status, " +
                 "COUNT(so_line.item) AS unbilled_line_count, " +
                 "SUM(so_line.netamount) AS total_unbilled_amount, " +
@@ -1442,7 +1463,7 @@ define(['N/ui/serverWidget', 'N/query', 'N/log', 'N/url', 'N/record', 'N/runtime
                 "    AND inv_line.taxline = 'F' " +
                 "    AND inv_line.mainline = 'F' " +
                 ") " +
-                "GROUP BY so.id, so.tranid, so.trandate, so.entity, so.status, so.custbody_f4n_job_id, so.custbody_service_queued_for_write_off, so.custbody24, so.shipdate, so.custbody_bas_estimated_ship_date, so.custbody_f4n_details, so.custbody21, so.custbody_f4n_job_state, so.custbody_f4n_scheduled, so.custbody_f4n_started, so.custbody_f4n_completed, so.custbody_service_research_notes " +
+                "GROUP BY so.id, so.tranid, so.trandate, so.entity, so.status, so.custbody_f4n_job_id, so.custbody_service_queued_for_write_off, so.custbody24, so.shipdate, so.custbody_bas_estimated_ship_date, so.custbody_f4n_details, so.custbody21, so.custbody_f4n_job_state, so.custbody_f4n_scheduled, so.custbody_f4n_started, so.custbody_f4n_completed, so.custbody_service_research_notes, so.custbody_service_research_followupdate " +
                 "ORDER BY so.tranid";
 
             log.audit('Running Unbilled SO Query', sql);
@@ -1497,6 +1518,8 @@ define(['N/ui/serverWidget', 'N/query', 'N/log', 'N/url', 'N/record', 'N/runtime
                 '<div class="modal-body">' +
                 '<label class="modal-label">Enter research note for this Sales Order:</label>' +
                 '<textarea id="researchNoteInput" class="modal-textarea" rows="6" placeholder="Enter notes here..."></textarea>' +
+                '<label class="modal-label" style="margin-top: 15px;">Follow Up Date:</label>' +
+                '<input type="date" id="followUpDateInput" class="modal-input" />' +
                 '</div>' +
                 '<div class="modal-footer">' +
                 '<button type="button" class="modal-btn modal-btn-cancel" onclick="closeResearchNoteModal()">Cancel</button>' +
@@ -1578,6 +1601,15 @@ define(['N/ui/serverWidget', 'N/query', 'N/log', 'N/url', 'N/record', 'N/runtime
                 '<input type="checkbox" id="filterFutureShipDates" onchange="applyFilters()">' +
                 '<span class="filter-label">Future Ship Dates</span>' +
                 '</label>' +
+                '<div class="filter-subsection-header" style="margin-top: 12px; border-top: 1px solid #cbd5e1; padding-top: 12px;">Research Notes</div>' +
+                '<label class="filter-item">' +
+                '<input type="checkbox" id="filterHasResearchNotes" checked onchange="applyFilters()">' +
+                '<span class="filter-label">Has Research Notes</span>' +
+                '</label>' +
+                '<label class="filter-item">' +
+                '<input type="checkbox" id="filterNoResearchNotes" checked onchange="applyFilters()">' +
+                '<span class="filter-label">No Research Notes</span>' +
+                '</label>' +
                 '</div>' +
                 '<div class="filter-card">' +
                 '<div class="filter-subsection-header">Job State</div>' +
@@ -1657,17 +1689,18 @@ define(['N/ui/serverWidget', 'N/query', 'N/log', 'N/url', 'N/record', 'N/runtime
                 '<th class="th-checkbox"><input type="checkbox" id="selectAllCheckbox" onchange="toggleSelectAll(this)"></th>' +
                 '<th class="th-actions">Actions</th>' +
                 '<th class="th-slate" onclick="sortTable(2)">Sales Order<span class="sort-arrow">↕</span></th>' +
-                '<th class="th-slate" onclick="sortTable(3)">Queued<span class="sort-arrow">↕</span></th>' +
-                '<th class="th-slate" onclick="sortTable(4)">Job ID<span class="sort-arrow">↕</span></th>' +
-                '<th class="th-slate" onclick="sortTable(5)">Warranty Type<span class="sort-arrow">↕</span></th>' +
-                '<th class="th-slate" onclick="sortTable(6)">EPIC Auth<span class="sort-arrow">↕</span></th>' +
-                '<th class="th-slate" onclick="sortTable(7)">Customer<span class="sort-arrow">↕</span></th>' +
-                '<th class="th-slate" onclick="sortTable(8)">SO Date<span class="sort-arrow">↕</span></th>' +
-                '<th class="th-slate" onclick="sortTable(9)">Ship Date<span class="sort-arrow">↕</span></th>' +
-                '<th class="th-slate" onclick="sortTable(10)">Est Ship Date<span class="sort-arrow">↕</span></th>' +
-                '<th class="th-slate" onclick="sortTable(11)">SO Status<span class="sort-arrow">↕</span></th>' +
-                '<th class="th-teal" onclick="sortTable(12)">Unbilled<br>Line Count<span class="sort-arrow">↕</span></th>' +
-                '<th class="th-teal" onclick="sortTable(13)">Total Unbilled<br>Amount<span class="sort-arrow">↕</span></th>' +
+                '<th class="th-slate th-follow-up" onclick="sortTable(3)">Follow Up<span class="sort-arrow">↕</span></th>' +
+                '<th class="th-slate" onclick="sortTable(4)">Queued<span class="sort-arrow">↕</span></th>' +
+                '<th class="th-slate" onclick="sortTable(5)">Job ID<span class="sort-arrow">↕</span></th>' +
+                '<th class="th-slate" onclick="sortTable(6)">Warranty Type<span class="sort-arrow">↕</span></th>' +
+                '<th class="th-slate" onclick="sortTable(7)">EPIC Auth<span class="sort-arrow">↕</span></th>' +
+                '<th class="th-slate" onclick="sortTable(8)">Customer<span class="sort-arrow">↕</span></th>' +
+                '<th class="th-slate" onclick="sortTable(9)">SO Date<span class="sort-arrow">↕</span></th>' +
+                '<th class="th-slate" onclick="sortTable(10)">Ship Date<span class="sort-arrow">↕</span></th>' +
+                '<th class="th-slate" onclick="sortTable(11)">Est Ship Date<span class="sort-arrow">↕</span></th>' +
+                '<th class="th-slate" onclick="sortTable(12)">SO Status<span class="sort-arrow">↕</span></th>' +
+                '<th class="th-teal" onclick="sortTable(13)">Unbilled<br>Line Count<span class="sort-arrow">↕</span></th>' +
+                '<th class="th-teal" onclick="sortTable(14)">Total Unbilled<br>Amount<span class="sort-arrow">↕</span></th>' +
                 '</tr>' +
                 '</thead>' +
                 '<tbody id="reportTableBody">';
@@ -1703,7 +1736,9 @@ define(['N/ui/serverWidget', 'N/query', 'N/log', 'N/url', 'N/record', 'N/runtime
             var shipDateRaw = record.ship_date || '';
             var warrantyType = record.warranty_type || '';
             var researchNotes = record.research_notes || '';
-            var html = '<tr class="line-items-row" data-so-id="' + soId + '" data-unbilled-lines="' + unbilledLines + '" data-unbilled-amount="' + unbilledAmount + '" data-unbilled-detail="' + unbilledDetail + '" data-job-details="' + escapeHtml(jobDetails) + '" data-billing-completed-by="' + escapeHtml(billingCompletedBy) + '" data-job-state="' + escapeHtml(jobState) + '" data-parts-status="' + escapeHtml(partsStatus) + '" data-scheduled-date="' + scheduledDate + '" data-job-started="' + jobStarted + '" data-job-completed="' + jobCompleted + '" data-ship-date="' + shipDateRaw + '" data-warranty-type="' + escapeHtml(warrantyType) + '" data-research-notes="' + escapeHtml(researchNotes) + '" onmouseenter="showLineItemsTooltip(this); showJobDetailsTooltip(this);" onmouseleave="hideLineItemsTooltip(); hideJobDetailsTooltip();">';
+            var followUpDate = record.follow_up_date || '';
+            var followUpDateForInput = toInputDateFormat(followUpDate); // Convert to YYYY-MM-DD for date input
+            var html = '<tr class="line-items-row" data-so-id="' + soId + '" data-unbilled-lines="' + unbilledLines + '" data-unbilled-amount="' + unbilledAmount + '" data-unbilled-detail="' + unbilledDetail + '" data-job-details="' + escapeHtml(jobDetails) + '" data-billing-completed-by="' + escapeHtml(billingCompletedBy) + '" data-job-state="' + escapeHtml(jobState) + '" data-parts-status="' + escapeHtml(partsStatus) + '" data-scheduled-date="' + scheduledDate + '" data-job-started="' + jobStarted + '" data-job-completed="' + jobCompleted + '" data-ship-date="' + shipDateRaw + '" data-warranty-type="' + escapeHtml(warrantyType) + '" data-research-notes="' + escapeHtml(researchNotes) + '" data-follow-up-date="' + followUpDateForInput + '" onmouseenter="showLineItemsTooltip(this); showJobDetailsTooltip(this);" onmouseleave="hideLineItemsTooltip(); hideJobDetailsTooltip();">';
             
             // Checkbox column
             html += '<td class="col-checkbox"><input type="checkbox" class="so-checkbox" value="' + soId + '" onchange="updateSelectedSummary()"></td>';
@@ -1714,6 +1749,7 @@ define(['N/ui/serverWidget', 'N/query', 'N/log', 'N/url', 'N/record', 'N/runtime
             // Sales Order columns (slate group)
             var noteIcon = researchNotes ? ' <span class="research-note-icon" id="note-icon-' + soId + '" title="Has research notes">ℹ️</span>' : '<span class="research-note-icon" id="note-icon-' + soId + '" style="display:none;" title="Has research notes">ℹ️</span>';
             html += '<td class="col-slate">' + buildTransactionLink(record.so_id, record.so_number, 'salesord') + noteIcon + '</td>';
+            html += '<td class="col-slate follow-up-cell" id="follow-up-cell-' + soId + '">' + formatDate(followUpDateForInput) + '</td>';
             html += '<td class="col-slate queued-cell" id="queued-cell-' + soId + '">';
             if (queuedDate) {
                 html += '<span class="queued-checkmark">✓</span><span class="unqueue-x" onclick="handleUnqueue(' + soId + ', event)" title="Remove from queue">✕</span>';
@@ -1826,10 +1862,43 @@ define(['N/ui/serverWidget', 'N/query', 'N/log', 'N/url', 'N/record', 'N/runtime
         function formatDate(dateValue) {
             if (!dateValue) return '';
             try {
+                // If date is in YYYY-MM-DD format, parse it as local date to avoid timezone issues
+                if (typeof dateValue === 'string' && dateValue.match(/^\d{4}-\d{2}-\d{2}$/)) {
+                    var parts = dateValue.split('-');
+                    var year = parseInt(parts[0], 10);
+                    var month = parseInt(parts[1], 10) - 1; // Month is 0-indexed
+                    var day = parseInt(parts[2], 10);
+                    var d = new Date(year, month, day);
+                    return (d.getMonth() + 1) + '/' + d.getDate() + '/' + d.getFullYear();
+                }
                 var d = new Date(dateValue);
                 return (d.getMonth() + 1) + '/' + d.getDate() + '/' + d.getFullYear();
             } catch (e) {
                 return dateValue;
+            }
+        }
+
+        /**
+         * Converts a date to YYYY-MM-DD format for HTML date inputs
+         * @param {string} dateValue
+         * @returns {string} Date in YYYY-MM-DD format
+         */
+        function toInputDateFormat(dateValue) {
+            if (!dateValue) return '';
+            try {
+                var d;
+                // If already in YYYY-MM-DD format, return as-is
+                if (typeof dateValue === 'string' && dateValue.match(/^\d{4}-\d{2}-\d{2}$/)) {
+                    return dateValue;
+                }
+                d = new Date(dateValue);
+                if (isNaN(d.getTime())) return '';
+                var year = d.getFullYear();
+                var month = String(d.getMonth() + 1).padStart(2, '0');
+                var day = String(d.getDate()).padStart(2, '0');
+                return year + '-' + month + '-' + day;
+            } catch (e) {
+                return '';
             }
         }
 
@@ -1913,6 +1982,7 @@ define(['N/ui/serverWidget', 'N/query', 'N/log', 'N/url', 'N/record', 'N/runtime
                 '.th-actions { background: #013220; cursor: default !important; text-align: center; width: 50px; color: white; font-weight: 600; padding: 10px 8px; }' +
                 '.th-slate { background: #013220; }' +
                 '.th-slate:hover { background: #012618; }' +
+                '.th-follow-up { width: 85px; }' +
                 '.th-teal { background: #355E3B; }' +
                 '.th-teal:hover { background: #2a4a2f; }' +
                 '.sort-arrow { margin-left: 5px; opacity: 0.7; font-size: 10px; }' +
@@ -1924,6 +1994,7 @@ define(['N/ui/serverWidget', 'N/query', 'N/log', 'N/url', 'N/record', 'N/runtime
                 '.actions-dropdown:hover { background: rgba(1, 50, 32, 0.05); }' +
                 '.actions-dropdown:focus { outline: none; background: rgba(1, 50, 32, 0.1); }' +
                 '.col-slate { background: #E6EBE9; max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }' +
+                '.follow-up-cell { width: 85px; text-align: center; font-size: 11px; }' +
                 '.col-teal { background: #EBF0EB; }' +
                 '#dataTable tbody tr:hover td.col-checkbox { background: #CDD7D3; }' +
                 '#dataTable tbody tr:hover td.col-actions { background: #CDD7D3; }' +
@@ -1989,6 +2060,8 @@ define(['N/ui/serverWidget', 'N/query', 'N/log', 'N/url', 'N/record', 'N/runtime
                 '.modal-label { display: block; font-size: 13px; color: #1a2e1f; margin-bottom: 10px; font-weight: 500; }' +
                 '.modal-textarea { width: 100%; padding: 12px; border: 1px solid #cbd5e1; border-radius: 4px; font-size: 13px; font-family: Arial, sans-serif; resize: vertical; box-sizing: border-box; }' +
                 '.modal-textarea:focus { outline: none; border-color: #013220; box-shadow: 0 0 0 2px rgba(1,50,32,0.15); }' +
+                '.modal-input { width: 100%; padding: 10px; border: 1px solid #cbd5e1; border-radius: 4px; font-size: 13px; font-family: Arial, sans-serif; box-sizing: border-box; }' +
+                '.modal-input:focus { outline: none; border-color: #013220; box-shadow: 0 0 0 2px rgba(1,50,32,0.15); }' +
                 '.modal-footer { padding: 15px 20px; border-top: 1px solid #e2e8f0; display: flex; justify-content: flex-end; gap: 10px; }' +
                 '.modal-btn { padding: 10px 20px; border-radius: 4px; font-size: 14px; font-weight: 600; cursor: pointer; transition: all 0.15s; }' +
                 '.modal-btn-cancel { background: white; color: #013220; border: 1px solid #cbd5e1; }' +
@@ -2014,6 +2087,10 @@ define(['N/ui/serverWidget', 'N/query', 'N/log', 'N/url', 'N/record', 'N/runtime
                 '  var showOldShipDates = oldShipDatesCheckbox ? oldShipDatesCheckbox.checked : true;' +
                 '  var showFutureShipDates = futureShipDatesCheckbox ? futureShipDatesCheckbox.checked : false;' +
                 '  var showNoShipDate = noShipDateCheckbox ? noShipDateCheckbox.checked : true;' +
+                '  var hasResearchNotesCheckbox = document.getElementById("filterHasResearchNotes");' +
+                '  var noResearchNotesCheckbox = document.getElementById("filterNoResearchNotes");' +
+                '  var showHasResearchNotes = hasResearchNotesCheckbox ? hasResearchNotesCheckbox.checked : true;' +
+                '  var showNoResearchNotes = noResearchNotesCheckbox ? noResearchNotesCheckbox.checked : true;' +
                 '  var jobScheduledCheckbox = document.getElementById("filterJobScheduled");' +
                 '  var jobActiveCheckbox = document.getElementById("filterJobActive");' +
                 '  var jobPausedCheckbox = document.getElementById("filterJobPaused");' +
@@ -2047,6 +2124,15 @@ define(['N/ui/serverWidget', 'N/query', 'N/log', 'N/url', 'N/record', 'N/runtime
                 '    var txtValue = row.textContent || row.innerText;' +
                 '    if (filter && txtValue.toUpperCase().indexOf(filter) === -1) {' +
                 '      showRow = false;' +
+                '    }' +
+                '    if (showRow) {' +
+                '      var researchNotes = row.getAttribute("data-research-notes") || "";' +
+                '      var hasNotes = researchNotes.trim().length > 0;' +
+                '      if (hasNotes && !showHasResearchNotes) {' +
+                '        showRow = false;' +
+                '      } else if (!hasNotes && !showNoResearchNotes) {' +
+                '        showRow = false;' +
+                '      }' +
                 '    }' +
                 '    if (showRow) {' +
                 '      var shipDateStr = row.getAttribute("data-ship-date");' +
@@ -2150,8 +2236,8 @@ define(['N/ui/serverWidget', 'N/query', 'N/log', 'N/url', 'N/record', 'N/runtime
                 '  var table = document.getElementById("dataTable");' +
                 '  var tbody = document.getElementById("reportTableBody");' +
                 '  var rows = Array.from(tbody.rows);' +
-                '  var numericCols = [12, 13];' +
-                '  var dateCols = [8, 9, 10];' +
+                '  var numericCols = [13, 14];' +
+                '  var dateCols = [3, 9, 10, 11];' +
                 '  var isNumeric = numericCols.indexOf(n) > -1;' +
                 '  var isDate = dateCols.indexOf(n) > -1;' +
                 '  sortDir[n] = sortDir[n] === "asc" ? "desc" : "asc";' +
@@ -2507,6 +2593,7 @@ define(['N/ui/serverWidget', 'N/query', 'N/log', 'N/url', 'N/record', 'N/runtime
                 '  var tooltipContent = document.getElementById("jobDetailsContent");' +
                 '  if (!tooltip || !tooltipContent) return;' +
                 '  var researchNotes = row.getAttribute("data-research-notes");' +
+                '  var followUpDate = row.getAttribute("data-follow-up-date");' +
                 '  var jobDetails = row.getAttribute("data-job-details");' +
                 '  var billingCompletedBy = row.getAttribute("data-billing-completed-by");' +
                 '  var jobState = row.getAttribute("data-job-state");' +
@@ -2517,6 +2604,17 @@ define(['N/ui/serverWidget', 'N/query', 'N/log', 'N/url', 'N/record', 'N/runtime
                 '  var html = "";' +
                 '  if (researchNotes) {' +
                 '    html += "<div class=\\"research-notes-section\\"><div class=\\"research-notes-label\\">Research Notes:</div><div class=\\"research-notes-value\\">" + researchNotes.replace(/&lt;br&gt;/gi, "<br>") + "</div></div>";' +
+                '  }' +
+                '  if (followUpDate) {' +
+                '    var formattedFollowUp = "";' +
+                '    if (followUpDate.match(/^\\d{4}-\\d{2}-\\d{2}$/)) {' +
+                '      var parts = followUpDate.split("-");' +
+                '      var d = new Date(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2]));' +
+                '      formattedFollowUp = (d.getMonth() + 1) + "/" + d.getDate() + "/" + d.getFullYear();' +
+                '    } else {' +
+                '      formattedFollowUp = new Date(followUpDate).toLocaleDateString();' +
+                '    }' +
+                '    html += "<div class=\\"research-notes-section\\"><div class=\\"research-notes-label\\">Follow Up Date:</div><div class=\\"research-notes-value\\">" + formattedFollowUp + "</div></div>";' +
                 '  }' +
                 '  var unescapedDetails = jobDetails ? jobDetails.replace(/&lt;br&gt;/gi, "<br>") : "None";' +
                 '  html += "<div class=\\"job-detail-section full-width\\"><div class=\\"job-detail-label\\">Job Details:</div><div class=\\"job-detail-value\\">" + unescapedDetails + "</div></div>";' +
@@ -2687,8 +2785,13 @@ define(['N/ui/serverWidget', 'N/query', 'N/log', 'N/url', 'N/record', 'N/runtime
                 '  currentNoteRow = row;' +
                 '  var modal = document.getElementById("researchNoteModal");' +
                 '  var textarea = document.getElementById("researchNoteInput");' +
+                '  var dateInput = document.getElementById("followUpDateInput");' +
                 '  if (modal && textarea) {' +
                 '    textarea.value = existingNote;' +
+                '    if (dateInput) {' +
+                '      var existingDate = row ? (row.getAttribute("data-follow-up-date") || "") : "";' +
+                '      dateInput.value = existingDate;' +
+                '    }' +
                 '    modal.style.display = "flex";' +
                 '    textarea.focus();' +
                 '  }' +
@@ -2701,7 +2804,9 @@ define(['N/ui/serverWidget', 'N/query', 'N/log', 'N/url', 'N/record', 'N/runtime
                 '}' +
                 'function saveResearchNote() {' +
                 '  var textarea = document.getElementById("researchNoteInput");' +
+                '  var dateInput = document.getElementById("followUpDateInput");' +
                 '  var newNote = textarea ? textarea.value : "";' +
+                '  var followUpDate = dateInput ? dateInput.value : "";' +
                 '  var soId = currentNoteSOId;' +
                 '  var row = currentNoteRow;' +
                 '  closeResearchNoteModal();' +
@@ -2718,11 +2823,23 @@ define(['N/ui/serverWidget', 'N/query', 'N/log', 'N/url', 'N/record', 'N/runtime
                 '          alert(resp.message);' +
                 '          if (row) {' +
                 '            row.setAttribute("data-research-notes", newNote);' +
+                '            row.setAttribute("data-follow-up-date", followUpDate);' +
                 '            var noteIcon = document.getElementById("note-icon-" + soId);' +
                 '            if (noteIcon) {' +
                 '              noteIcon.style.display = newNote ? "inline" : "none";' +
                 '            }' +
+                '            var followUpCell = document.getElementById("follow-up-cell-" + soId);' +
+                '            if (followUpCell) {' +
+                '              var formattedDate = "";' +
+                '              if (followUpDate && followUpDate.match(/^\\d{4}-\\d{2}-\\d{2}$/)) {' +
+                '                var parts = followUpDate.split("-");' +
+                '                var d = new Date(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2]));' +
+                '                formattedDate = (d.getMonth() + 1) + "/" + d.getDate() + "/" + d.getFullYear();' +
+                '              }' +
+                '              followUpCell.textContent = formattedDate;' +
+                '            }' +
                 '          }' +
+                '          applyFilters();' +
                 '        } else {' +
                 '          alert("Error: " + resp.message);' +
                 '        }' +
@@ -2731,7 +2848,7 @@ define(['N/ui/serverWidget', 'N/query', 'N/log', 'N/url', 'N/record', 'N/runtime
                 '      }' +
                 '    }' +
                 '  };' +
-                '  xhr.send("action=add-note&soId=" + soId + "&note=" + encodeURIComponent(newNote));' +
+                '  xhr.send("action=add-note&soId=" + soId + "&note=" + encodeURIComponent(newNote) + "&followUpDate=" + encodeURIComponent(followUpDate));' +
                 '}';
         }
 
