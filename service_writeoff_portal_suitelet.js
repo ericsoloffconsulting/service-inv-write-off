@@ -2810,41 +2810,37 @@ define(['N/ui/serverWidget', 'N/query', 'N/log', 'N/url', 'N/record', 'N/runtime
                 '  var soId = currentNoteSOId;' +
                 '  var row = currentNoteRow;' +
                 '  closeResearchNoteModal();' +
-                '  showLoading();' +
+                '  if (row) {' +
+                '    row.setAttribute("data-research-notes", newNote);' +
+                '    row.setAttribute("data-follow-up-date", followUpDate);' +
+                '    var noteIcon = document.getElementById("note-icon-" + soId);' +
+                '    if (noteIcon) {' +
+                '      noteIcon.style.display = newNote ? "inline" : "none";' +
+                '    }' +
+                '    var followUpCell = document.getElementById("follow-up-cell-" + soId);' +
+                '    if (followUpCell) {' +
+                '      var formattedDate = "";' +
+                '      if (followUpDate && followUpDate.match(/^\\d{4}-\\d{2}-\\d{2}$/)) {' +
+                '        var parts = followUpDate.split("-");' +
+                '        var d = new Date(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2]));' +
+                '        formattedDate = (d.getMonth() + 1) + "/" + d.getDate() + "/" + d.getFullYear();' +
+                '      }' +
+                '      followUpCell.textContent = formattedDate;' +
+                '    }' +
+                '  }' +
+                '  applyFilters();' +
                 '  var xhr = new XMLHttpRequest();' +
                 '  xhr.open("POST", SUITELET_URL, true);' +
                 '  xhr.setRequestHeader("Content-Type", "application/x-www-form-urlencoded");' +
                 '  xhr.onreadystatechange = function() {' +
                 '    if (xhr.readyState === 4) {' +
-                '      hideLoading();' +
                 '      try {' +
                 '        var resp = JSON.parse(xhr.responseText);' +
-                '        if (resp.success) {' +
-                '          alert(resp.message);' +
-                '          if (row) {' +
-                '            row.setAttribute("data-research-notes", newNote);' +
-                '            row.setAttribute("data-follow-up-date", followUpDate);' +
-                '            var noteIcon = document.getElementById("note-icon-" + soId);' +
-                '            if (noteIcon) {' +
-                '              noteIcon.style.display = newNote ? "inline" : "none";' +
-                '            }' +
-                '            var followUpCell = document.getElementById("follow-up-cell-" + soId);' +
-                '            if (followUpCell) {' +
-                '              var formattedDate = "";' +
-                '              if (followUpDate && followUpDate.match(/^\\d{4}-\\d{2}-\\d{2}$/)) {' +
-                '                var parts = followUpDate.split("-");' +
-                '                var d = new Date(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2]));' +
-                '                formattedDate = (d.getMonth() + 1) + "/" + d.getDate() + "/" + d.getFullYear();' +
-                '              }' +
-                '              followUpCell.textContent = formattedDate;' +
-                '            }' +
-                '          }' +
-                '          applyFilters();' +
-                '        } else {' +
-                '          alert("Error: " + resp.message);' +
+                '        if (!resp.success) {' +
+                '          alert("Error saving research note: " + resp.message + "\\n\\nPlease refresh the page.");' +
                 '        }' +
                 '      } catch (e) {' +
-                '        alert("Error processing response: " + e.toString());' +
+                '        console.error("Error processing response:", e);' +
                 '      }' +
                 '    }' +
                 '  };' +
