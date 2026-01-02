@@ -1670,7 +1670,7 @@ define(['N/ui/serverWidget', 'N/query', 'N/log', 'N/url', 'N/record', 'N/runtime
          */
         function buildDataTable(data) {
             var html = '<div class="table-controls">' +
-                '<input type="text" id="searchBox" placeholder="Search table..." onkeyup="filterTable()">' +
+                '<input type="text" id="searchBox" placeholder="Search table... (Use | for OR, space for AND)" onkeyup="filterTable()">' +
                 '<div class="bulk-action-container">' +
                 '<select id="bulkActionSelect" class="bulk-action-select" disabled>' +
                 '<option value="">▼ Select Bulk Actions</option>' +
@@ -2122,8 +2122,33 @@ define(['N/ui/serverWidget', 'N/query', 'N/log', 'N/url', 'N/record', 'N/runtime
                 '    var row = tr[i];' +
                 '    var showRow = true;' +
                 '    var txtValue = row.textContent || row.innerText;' +
-                '    if (filter && txtValue.toUpperCase().indexOf(filter) === -1) {' +
-                '      showRow = false;' +
+                '    if (filter) {' +
+                '      var txtValueUpper = txtValue.toUpperCase();' +
+                '      if (filter.indexOf("|") > -1) {' +
+                '        var orTerms = filter.split("|");' +
+                '        var matchFound = false;' +
+                '        for (var j = 0; j < orTerms.length; j++) {' +
+                '          var term = orTerms[j].trim();' +
+                '          if (term && txtValueUpper.indexOf(term) > -1) {' +
+                '            matchFound = true;' +
+                '            break;' +
+                '          }' +
+                '        }' +
+                '        if (!matchFound) showRow = false;' +
+                '      } else if (filter.indexOf(" ") > -1) {' +
+                '        var andTerms = filter.split(" ");' +
+                '        for (var k = 0; k < andTerms.length; k++) {' +
+                '          var andTerm = andTerms[k].trim();' +
+                '          if (andTerm && txtValueUpper.indexOf(andTerm) === -1) {' +
+                '            showRow = false;' +
+                '            break;' +
+                '          }' +
+                '        }' +
+                '      } else {' +
+                '        if (txtValueUpper.indexOf(filter) === -1) {' +
+                '          showRow = false;' +
+                '        }' +
+                '      }' +
                 '    }' +
                 '    if (showRow) {' +
                 '      var researchNotes = row.getAttribute("data-research-notes") || "";' +
